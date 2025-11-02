@@ -1,0 +1,67 @@
+# Project config for Alpha Flip Research
+project:
+  seed: 42
+  out_dir: "outputs"
+
+data:
+  # Globs for ticks; if empty or not found, synthetic data will be generated.
+  ticks_glob: ["data/ticks_raw/BTCUSDT-ticks-*.csv"]
+  # Optional: prebuilt 1m bars (if you have them). Otherwise we build from ticks.
+  bars_1m_glob: []
+  symbol: "BTCUSDT"
+  tz: "UTC"
+
+regime:
+  macro_bar: "4h"
+  detector:
+    type: "ols_slope_r2"
+    lookback_bars: 90
+    r2_min: 0.25
+    hysteresis_bars: 6
+  vol_bucket:
+    type: "realized_vol_pct"
+    lookback_bars: 60
+    cuts: [0.0, 0.4, 0.7, 1.0]
+
+labels:
+  flip_horizon_min: [60, 180]     # we try both under nested CV
+  lead_window_pre_min: 720        # pre-flip event-study window
+  post_window_min: 360            # post window for plots
+
+features:
+  sampling: "1m"
+  sets: ["compression", "volofvol", "ofi", "skewkurt", "acf_break", "liquidity", "seasonality"]
+  normalize:
+    method: "rolling_robust_z"    # median/MAD
+    window_days: 5
+    per_hour_of_day: true
+    winsor_pct: 0.01
+  params:
+    returns_win: 64
+    bb_win: 64
+    donchian_win: 128
+    atr_win: 64
+    ofi_win: 60
+    acf_lags: [1, 5, 10]
+    skew_win: 128
+    kurt_win: 128
+
+cpcv:
+  embargo_min: "@flip_horizon_min"
+  n_blocks: 6                 # monthly-ish blocks for CPCV; auto-detected by month if possible
+  max_combinations: 10        # cap combinations for speed
+
+event_study:
+  permutations: 500
+  fdr_q: 0.10
+
+hazard:
+  flip_horizon_min: 180           # choose one for training; grid via nested CV if desired
+  model: "logit"                  # logistic regression
+  class_weight: "balanced"
+  calibrate: true                 # isotonic
+  alert_threshold: 0.35
+  min_separation_min: 30
+
+evaluation:
+  metrics: ["flip_coverage", "false_alarms_per_day", "lead_time_avg", "brier"]
