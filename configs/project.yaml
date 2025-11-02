@@ -31,6 +31,8 @@ labels:
 features:
   sampling: "1m"
   sets: ["compression", "volofvol", "ofi", "skewkurt", "acf_break", "liquidity", "seasonality"]
+  include: ["ret_1m", "rv_1m", "z_vol_1m", "trade_rate_1s", "imbalance_1s", "liq_stress"]
+  lags: [-180, -120, -90, -60, -30]
   normalize:
     method: "rolling_robust_z"    # median/MAD
     window_days: 5
@@ -52,7 +54,9 @@ cpcv:
   max_combinations: 10        # cap combinations for speed
 
 event_study:
-  permutations: 500
+  pre_minutes: 180
+  post_minutes: 60
+  permutations: 5000
   fdr_q: 0.10
 
 hazard:

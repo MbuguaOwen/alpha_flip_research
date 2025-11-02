@@ -58,7 +58,15 @@ def main():
         norm = RollingRobustZ(window_days=cfg["features"]["normalize"]["window_days"],
                               per_hour_of_day=cfg["features"]["normalize"]["per_hour_of_day"],
                               winsor_pct=cfg["features"]["normalize"]["winsor_pct"])
-        X = norm.transform(feats).reindex(y.index).dropna()
+        X = norm.transform(feats)
+        inc = cfg.get("features", {}).get("include")
+        if inc:
+            cols = [c for c in inc if c in X.columns]
+            if cols:
+                X = X[cols]
+            else:
+                warn("Configured features.include has no overlap with computed features; proceeding with all features.")
+        X = X.reindex(y.index).dropna()
         y = y.reindex(X.index).fillna(0).astype(int)  # align
         pb.advance()
 

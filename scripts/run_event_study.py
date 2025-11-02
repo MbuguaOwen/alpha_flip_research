@@ -20,6 +20,24 @@ def main():
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config, "r"))
 
+    # Write a small preregistration manifest for auditability
+    try:
+        prereg = {
+            "macro_bar": cfg["regime"]["macro_bar"],
+            "pre_minutes": cfg["event_study"]["pre_minutes"],
+            "post_minutes": cfg["event_study"]["post_minutes"],
+            "permutations": cfg["event_study"]["permutations"],
+            "fdr_q": cfg["event_study"]["fdr_q"],
+            "features_include": cfg.get("features", {}).get("include", []),
+            "lags": cfg.get("features", {}).get("lags", cfg.get("event_study", {}).get("lags", [])),
+        }
+        os.makedirs(os.path.join(cfg["project"]["out_dir"], "event_study"), exist_ok=True)
+        with open(os.path.join(cfg["project"]["out_dir"], "event_study", "preregistered.json"), "w") as f:
+            import json
+            json.dump(prereg, f, indent=2)
+    except Exception:
+        pass
+
     out_dir = os.path.join(cfg["project"]["out_dir"], "event_study")
     ensure_dirs([out_dir])
 
@@ -54,15 +72,32 @@ def main():
                               per_hour_of_day=cfg["features"]["normalize"]["per_hour_of_day"],
                               winsor_pct=cfg["features"]["normalize"]["winsor_pct"])
         feats_z = norm.transform(feats)
+        # Optional: restrict to configured feature subset
+        inc = cfg.get("features", {}).get("include")
+        if inc:
+            cols = [c for c in inc if c in feats_z.columns]
+            if cols:
+                feats_z = feats_z[cols]
+            else:
+                warn("Configured features.include has no overlap with computed features; proceeding with all features.")
         pb.advance()
 
         # 4) Event study around flips
         info("Running event study (permutations)...")
-        res = evt(flips, feats_z,
-                  pre_minutes=cfg["labels"]["lead_window_pre_min"],
-                  post_minutes=cfg["labels"]["post_window_min"],
-                  n_perm=cfg["event_study"]["permutations"],
-                  show_progress=True)
+        pre_m = cfg.get("event_study", {}).get("pre_minutes", cfg["labels"]["lead_window_pre_min"])
+        post_m = cfg.get("event_study", {}).get("post_minutes", cfg["labels"]["post_window_min"])
+        n_perm = cfg.get("event_study", {}).get("permutations", 500)
+        # Prefer feature-level lags, fallback to event_study.lags
+        lags_cfg = cfg.get("features", {}).get("lags", cfg.get("event_study", {}).get("lags"))
+        res = evt(
+            flips,
+            feats_z,
+            pre_minutes=int(pre_m),
+            post_minutes=int(post_m),
+            n_perm=int(n_perm),
+            show_progress=True,
+            lags=lags_cfg,
+        )
         pb.advance()
 
         # 5) FDR control across features-lags
