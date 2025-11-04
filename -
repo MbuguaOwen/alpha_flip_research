@@ -8,9 +8,7 @@ data:
   ticks_glob: [
     "data/ticks_raw/BTCUSDT-ticks-2025-04.csv",
     "data/ticks_raw/BTCUSDT-ticks-2025-05.csv",
-    "data/ticks_raw/BTCUSDT-ticks-2025-06.csv",
-    "data/ticks_raw/BTCUSDT-ticks-2025-07.csv",
-    "data/ticks_raw/BTCUSDT-ticks-2025-08.csv"
+    "data/ticks_raw/BTCUSDT-ticks-2025-06.csv"
   ]
   # Optional: prebuilt 1m bars (if you have them). Otherwise we build from ticks.
   bars_1m_glob: []
@@ -41,12 +39,10 @@ features:
   # X["imbalance_1s_against_regime"] = - R.shift(1) * X["imbalance_1s"]
   include: ["ret_1m", "rv_1m", "z_vol_1m", "trade_rate_1s", "imbalance_1s", "imbalance_1s_against_regime", "liq_stress"]
   lags: [-120, -60, -30]
-  selected:
-    - { name: "imbalance_1s", lag_min: -30 }
   normalize:
     method: "rolling_robust_z"    # median/MAD
-    window_days: 1
-    per_hour_of_day: false
+    window_days: 5
+    per_hour_of_day: true
     winsor_pct: 0.01
   params:
     returns_win: 64
@@ -64,39 +60,18 @@ cpcv:
   max_combinations: 10        # cap combinations for speed
 
 event_study:
-  pre_minutes: 150
+  pre_minutes: 120
   post_minutes: 45
   permutations: 5000
   fdr_q: 0.10
-  min_events_per_test: 8
 
 hazard:
   flip_horizon_min: 180           # choose one for training; grid via nested CV if desired
   model: "logit"                  # logistic regression
   class_weight: "balanced"
   calibrate: true                 # isotonic
-  # Gate (final)
-  alert_threshold: 0.558   # ≈ 0.60 episode coverage
-  confirm_k: 2
-  ema_span: 3
-  min_separation_min: 60
-
-  # optional hysteresis (add if you implement it in gate/backtest)
-  # alert_threshold_off: 0.540   # ~thr_on - 0.02
-
-# Optional “watch” channel for early heads-up; no trades
-# hazard:
-#   watch:
-#     alert_threshold: 0.555
-#     confirm_k: 1
-#     ema_span: 5
-#     min_separation_min: 60
-
-# hazard (preset: high recall)
-# alert_threshold: 0.566  # ≈ 0.70 coverage
-# confirm_k: 1
-# ema_span: 3
-# min_separation_min: 60
+  alert_threshold: 0.35
+  min_separation_min: 30
 
 evaluation:
   metrics: ["flip_coverage", "false_alarms_per_day", "lead_time_avg", "brier"]

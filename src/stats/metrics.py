@@ -4,14 +4,17 @@ from sklearn.metrics import brier_score_loss
 def evaluate_hazard(X, y, model, cal_model, splits, H, alert_threshold=0.35, min_sep_min=30):
     preds = pd.Series(index=X.index, dtype=float)
     for (tr, te) in splits:
-        proba = model.predict_proba(X.loc[te])[:,1]
-        if cal_model is not None:
-            # calibrator expects same input scale; refit done inside train function per splits; here assume global
-            pass
+        proba_raw = model.predict_proba(X.loc[te])[:, 1]
+        # If a global calibrator was fit, you may choose to apply it here.
+        # Keep as raw by default to avoid leakage; optional: uncomment to use cal_model.
+        proba = proba_raw
         preds.loc[te] = proba
-    preds = preds.sort_index().ffill()  # smooth missing
+    preds = preds.sort_index()
+    # Guard metrics against stray NaNs / inf and improve numeric stability
+    preds = preds.replace([float("inf"), float("-inf")], float("nan")).clip(1e-6, 1 - 1e-6).dropna()
+    y_eval = y.loc[preds.index]
     # basic calibration metric
-    brier = brier_score_loss(y.loc[preds.index], preds)
+    brier = brier_score_loss(y_eval, preds)
     # alerts
     alerts = (preds >= alert_threshold).astype(int)
     # throttle

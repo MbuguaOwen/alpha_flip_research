@@ -3,6 +3,8 @@ import os, sys
 # Ensure repository root is on path when run from scripts/
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import argparse, yaml, traceback
+import json
+import pandas as pd
 from src.io import ensure_dirs, maybe_make_synthetic, load_ticks, load_bars_1m
 from src.ticks_to_bars import ticks_to_1m
 from src.regimes import build_macro_regime, find_flips, make_flip_labels
@@ -12,13 +14,14 @@ from src.stats.cpcv import cpcv_split_by_months
 from src.models.hazard import train_hazard_logit
 from src.stats.metrics import evaluate_hazard, save_metrics
 from src.cli import ProgressBar, info, ok, warn, error
+from src.gate import gate_timeseries
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
-    cfg = yaml.safe_load(open(args.config, "r"))
+    cfg = yaml.safe_load(open(args.config, "r", encoding="utf-8"))
 
     out_dir = os.path.join(cfg["project"]["out_dir"], "hazard")
     ensure_dirs([out_dir])
@@ -49,9 +52,19 @@ def main():
         y, lead_time = make_flip_labels(macro, flips, horizon_min=H)
         pb.advance()
 
-        # Micro features (causal) + normalization
+        # Micro features (causal) + regime-aligned transform (no lookahead) + normalization
         info("Computing micro features...")
         feats = build_micro_features(bars_1m, ticks, cfg["features"])
+        # Add imbalance_1s_against_regime = - R.shift(1) * imbalance_1s
+        try:
+            if "imbalance_1s" in feats.columns:
+                R = macro["trend_state"].map({"bull": 1, "bear": -1}).fillna(0).astype(float)
+                R_past = R.shift(1).reindex(feats.index, method="pad").fillna(0.0)
+                feats["imbalance_1s_against_regime"] = - R_past * feats["imbalance_1s"]
+            else:
+                warn("imbalance_1s not available; cannot compute imbalance_1s_against_regime.")
+        except Exception as _e:
+            warn(f"Failed to compute imbalance_1s_against_regime: {_e}")
         pb.advance()
 
         info("Normalizing features (rolling robust z)...")
@@ -59,21 +72,40 @@ def main():
                               per_hour_of_day=cfg["features"]["normalize"]["per_hour_of_day"],
                               winsor_pct=cfg["features"]["normalize"]["winsor_pct"])
         X = norm.transform(feats)
-        inc = cfg.get("features", {}).get("include")
-        if inc:
-            cols = [c for c in inc if c in X.columns]
+        feat_cfg = cfg.get("features", {})
+        selected_cfg = feat_cfg.get("selected")
+        include_cfg = feat_cfg.get("include")
+        # keep only the columns you intend to model
+        selected_names = [d["name"] for d in selected_cfg] if selected_cfg else include_cfg
+        if selected_names:
+            cols = [c for c in X.columns if c in selected_names]
             if cols:
-                X = X[cols]
+                X = X[cols].copy()
             else:
-                warn("Configured features.include has no overlap with computed features; proceeding with all features.")
-        X = X.reindex(y.index).dropna()
-        y = y.reindex(X.index).fillna(0).astype(int)  # align
+                warn("Selected/include list has no overlap with computed features; proceeding with available features.")
+        # single, authoritative validity mask (after selection)
+        X = X.reindex(y.index)
+        valid = X.notna().all(1) & y.notna()
+        X = X.loc[valid]
+        y = y.loc[valid].astype(int)
         pb.advance()
 
         # CPCV splits by month with embargo ~ H
         info("Creating CPCV splits...")
         splits = cpcv_split_by_months(X.index, n_blocks=cfg["cpcv"]["n_blocks"],
                                       embargo_minutes=H, max_combinations=cfg["cpcv"]["max_combinations"])
+        # intersect with the cleaned X index and drop empty / single-class folds
+        clean_splits = []
+        for tr_idx, te_idx in splits:
+            tr = X.index.intersection(tr_idx)
+            te = X.index.intersection(te_idx)
+            if len(tr) == 0 or len(te) == 0:
+                continue
+            if y.loc[tr].nunique() < 2:
+                continue
+            clean_splits.append((tr, te))
+        splits = clean_splits
+        assert len(splits) > 0, "No valid CPCV folds after cleaning."
         pb.advance()
 
         # Train hazard model (logit + isotonic if requested)
@@ -91,11 +123,38 @@ def main():
                                                min_sep_min=cfg["hazard"]["min_separation_min"])
         pb.advance()
 
-        info("Saving metrics and calibrated probabilities...")
-        save_metrics(metrics, os.path.join(out_dir, "hazard_metrics.json"))
-        yhat_series.to_csv(os.path.join(out_dir, "hazard_probs.csv"))
+        # --- SAVE: metrics + calibrated OOF probs + labels ---
+        out_dir = os.path.join(cfg["project"]["out_dir"], "hazard")
+        os.makedirs(out_dir, exist_ok=True)
+
+        probs_fp   = os.path.join(out_dir, "hazard_probs.csv")
+        metrics_fp = os.path.join(out_dir, "hazard_metrics.json")
+
+        # align y to the prob index and coerce to int
+        y_aligned = y.reindex(yhat_series.index).fillna(0).astype(int)
+
+        df_out = pd.DataFrame({
+            "ts": yhat_series.index,        # explicit timestamp column
+            "p":  yhat_series.values,       # calibrated probabilities
+            "y":  y_aligned.values          # labels (0/1)
+        })
+        df_out.to_csv(probs_fp, index=False)
+        json.dump(metrics, open(metrics_fp, "w"))
+
+        print(f"[ok] Hazard evaluation complete: {metrics_fp} and {probs_fp}")
+        # Also compute and save sparse alert times for quick inspection (parity with live)
+        gate = cfg.get("hazard", {})
+        alerts = gate_timeseries(
+            yhat_series,
+            float(gate.get("alert_threshold", 0.5)),
+            int(gate.get("confirm_k", 1)),
+            int(gate.get("ema_span", 1)),
+            int(gate.get("min_separation_min", 0)),
+        )
+        alerts_fp = os.path.join(out_dir, "hazard_alerts.csv")
+        pd.DataFrame({"ts": alerts, "alert": 1}).to_csv(alerts_fp, index=False)
+        print(f"[ok] saved alerts: {alerts_fp}")
         pb.advance(); pb.finish()
-        ok("Hazard evaluation complete: metrics & calibrated probs saved.")
     except Exception as e:
         try:
             pb.finish()

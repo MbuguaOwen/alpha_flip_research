@@ -11,12 +11,16 @@ def cpcv_split_by_months(idx, n_blocks=6, embargo_minutes=60, max_combinations=1
     blocks = [ix[months==u] for u in uniq]
     pairs = []
     for i in range(len(blocks)):
-        for j in range(i+1, len(blocks)):
+        for j in range(i + 1, len(blocks)):
             test = blocks[j]
-            train_blocks = [k for k in range(len(blocks)) if k not in (i,j)]
-            train = pd.DatetimeIndex([])
-            for k in train_blocks:
-                train = train.append(blocks[k])
+            train_blocks = [k for k in range(len(blocks)) if k not in (i, j)]
+            # Vectorized gather + concat to avoid append deprecation
+            if len(train_blocks):
+                parts = [blocks[k].view("i8") for k in train_blocks]
+                joined = np.concatenate(parts) if len(parts) else np.array([], dtype="i8")
+                train = pd.to_datetime(joined, utc=True)
+            else:
+                train = pd.DatetimeIndex([])
             # embargo around test
             emb = pd.Timedelta(minutes=embargo_minutes)
             test_start = test.min(); test_end = test.max()

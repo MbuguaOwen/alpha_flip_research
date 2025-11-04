@@ -12,7 +12,7 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--entries_csv", help="CSV of your micro entries with timestamp index and 'side'/'price' columns")
     args = ap.parse_args()
-    cfg = yaml.safe_load(open(args.config, "r"))
+    cfg = yaml.safe_load(open(args.config, "r", encoding="utf-8"))
 
     out_dir = os.path.join(cfg["project"]["out_dir"], "gate_backtest")
     ensure_dirs([out_dir])

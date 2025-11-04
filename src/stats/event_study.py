@@ -21,6 +21,7 @@ def run_event_study(
     n_perm=500,
     show_progress: bool = True,
     lags=None,
+    min_events=None,
 ):
     """Align windows around flips and test pre-flip feature deviations with permutation tests.
 
@@ -31,6 +32,8 @@ def run_event_study(
     - post_minutes: kept for API symmetry; unused here
     - n_perm: int, permutations per test
     - show_progress: bool, render a simple console progress bar
+    - lags: optional list of negative-minute lags to evaluate
+    - min_events: optional int, minimum valid samples required to test a lag
     """
     results = []
 
@@ -65,7 +68,8 @@ def run_event_study(
                 tt = t - pd.Timedelta(minutes=lag_abs)
                 if tt in series.index:
                     values.append(series.loc[tt])
-            if len(values) >= 20:  # need sample size
+            min_req = int(min_events) if (min_events is not None) else 20
+            if len(values) >= min_req:  # need sample size
                 values = np.array(values, dtype=float)
                 stat, p = permutation_test_series(values, n_perm=n_perm)
                 results.append({
