@@ -1,0 +1,7 @@
+{
+  "brier": 0.24821200167322388,
+  "flip_coverage": 0.5,
+  "false_alarms_per_day": 1.7096336499321574,
+  "lead_time_avg_min": 106.8,
+  "horizon_min": 180
+}

@@ -1,0 +1,1 @@
+{"features_include":["ret_1m","rv_1m","z_vol_1m","trade_rate_1s","imbalance_1s","imbalance_1s_against_regime","liq_stress"],"lags":[-120,-60,-30],"macro_bar":"4h","selected_event_features":[{"name":"imbalance_1s","lag_min":-30}]}

@@ -4,6 +4,7 @@ import os, sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import argparse, yaml, traceback
 import json
+from joblib import dump
 import pandas as pd
 from src.io import ensure_dirs, maybe_make_synthetic, load_ticks, load_bars_1m
 from src.ticks_to_bars import ticks_to_1m
@@ -154,6 +155,65 @@ def main():
         alerts_fp = os.path.join(out_dir, "hazard_alerts.csv")
         pd.DataFrame({"ts": alerts, "alert": 1}).to_csv(alerts_fp, index=False)
         print(f"[ok] saved alerts: {alerts_fp}")
+
+        # --- ADD/KEEP at top of file ---
+        # import os, json
+        # from joblib import dump
+        # import pandas as pd
+        # from src.gate import gate_timeseries
+
+        # --- ADD near the end, before the final print/return ---
+        out_dir = os.path.join(cfg["project"]["out_dir"], "hazard")
+        os.makedirs(out_dir, exist_ok=True)
+
+        # 1) Save calibrated probabilities + labels (you already do this)
+        probs_fp   = os.path.join(out_dir, "hazard_probs.csv")
+        metrics_fp = os.path.join(out_dir, "hazard_metrics.json")
+        (pd.DataFrame({"p": yhat_series}).join(y.rename("y"), how="left")
+           .to_csv(probs_fp, index_label="ts"))
+        json.dump(metrics, open(metrics_fp, "w"))
+
+        # 2) Save the model, calibrator, and feature/normalization specs
+        dump(model,      os.path.join(out_dir, "model.joblib"))
+        if cal_model is not None:
+            dump(cal_model, os.path.join(out_dir, "calibrator.joblib"))
+
+        # Minimal feature spec so BT/live build the SAME inputs
+        feat_spec = {
+            "features_include": cfg["features"]["include"],
+            "lags": cfg["features"]["lags"],
+            "macro_bar": cfg["regime"]["macro_bar"],
+            "selected_event_features": [{"name":"imbalance_1s","lag_min":-30}],
+        }
+        pd.Series(feat_spec).to_json(os.path.join(out_dir, "feature_spec.json"))
+
+        # Normalization config so BT/live use same rolling robust-z settings
+        norm_spec = cfg["features"]["normalize"]
+        pd.Series(norm_spec).to_json(os.path.join(out_dir, "norm_config.json"))
+
+        # 3) Save gate params (operating point) and emit alerts now for parity
+        gate_cfg = cfg["hazard"]
+        pd.Series({
+            "alert_threshold": gate_cfg["alert_threshold"],
+            "confirm_k": gate_cfg.get("confirm_k", 1),
+            "ema_span": gate_cfg.get("ema_span", 1),
+            "min_separation_min": gate_cfg.get("min_separation_min", 0),
+            "notes": "frozen operating point for BT/live parity"
+        }).to_json(os.path.join(out_dir, "operating_point.json"))
+
+        A = gate_timeseries(
+            yhat_series,
+            gate_cfg["alert_threshold"],
+            gate_cfg.get("confirm_k", 1),
+            gate_cfg.get("ema_span", 1),
+            gate_cfg.get("min_separation_min", 0),
+        )
+        pd.DataFrame({"ts": A, "alert": 1}).to_csv(os.path.join(out_dir, "hazard_alerts.csv"), index=False)
+
+        print(f"[ok] Hazard evaluation complete: {metrics_fp} and {probs_fp}")
+        print(f"[ok] saved alerts: {os.path.join(out_dir, 'hazard_alerts.csv')}")
+        print(f"[ok] saved model: {os.path.join(out_dir, 'model.joblib')}")
+
         pb.advance(); pb.finish()
     except Exception as e:
         try:

@@ -1,0 +1,1 @@
+{"method":"rolling_robust_z","window_days":1,"per_hour_of_day":false,"winsor_pct":0.01}
